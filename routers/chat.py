@@ -7,5 +7,5 @@ service = LangChainService()
 
 @router.post("/")
 async def chat_endpoint(request: ChatRequest):
-    result = await service.run(request.message)
+    result = await service.run(request.message, request.domain)
     return {"response": result}
