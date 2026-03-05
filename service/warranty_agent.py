@@ -1,5 +1,6 @@
 import os
 import httpx
+import os
 
 WARRANTY_AGENT_URL = os.environ.get(
     "WARRANTY_AGENT_URL",
