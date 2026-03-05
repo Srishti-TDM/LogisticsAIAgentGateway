@@ -1,8 +1,12 @@
+import os
 import httpx
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
-RISK_AGENT_URL = "https://read-only-ai-agent-warranty-production.up.railway.app"
+RISK_AGENT_URL = os.environ.get(
+    "WARRANTY_AGENT_URL",
+    "https://read-only-ai-agent-warranty-production.up.railway.app",
+)
 
 RISK_PROMPT = ChatPromptTemplate.from_template(
     "You are a logistics risk management assistant. "
