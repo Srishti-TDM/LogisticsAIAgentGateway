@@ -41,6 +41,19 @@ CLASSIFIER_PROMPT = ChatPromptTemplate.from_template(
     "User request: {message}"
 )
 
+SEARCH_KEYWORD_PROMPT = ChatPromptTemplate.from_template(
+    "Extract a short search keyword (1-3 words) from this user request that would match "
+    "inventory part descriptions in a database. Use the actual component name that would "
+    "appear in a parts catalog (e.g. 'turbocharger' not 'turbo', 'water pump' not 'pump', "
+    "'engine oil' not 'lubrication').\n\n"
+    "Also determine if it matches one of these categories: "
+    "lubricants, filtration, cooling, fuel_system, exhaust.\n\n"
+    "User request: {message}\n\n"
+    "Respond in EXACTLY this format (no other text):\n"
+    "keyword: <search term>\n"
+    "category: <category or none>"
+)
+
 
 _DOMAIN_REQUEST_RE = re.compile(
     r"^Domain:\s*(?P<domain>\S+)\s+User Request:\s*(?P<request>.+)",
@@ -145,9 +158,27 @@ class LangChainService:
         except httpx.HTTPError as e:
             return {"error": f"Risk agent unreachable: {str(e)}"}
 
+    async def _extract_search_params(self, message: str) -> tuple[str, str | None]:
+        """Use LLM to extract a search keyword and optional category from the user message."""
+        chain = SEARCH_KEYWORD_PROMPT | self.llm
+        response = await chain.ainvoke({"message": message})
+        text = response.content.strip()
+
+        keyword = message  # fallback
+        category = None
+        for line in text.splitlines():
+            line = line.strip().lower()
+            if line.startswith("keyword:"):
+                keyword = line.split(":", 1)[1].strip()
+            elif line.startswith("category:"):
+                val = line.split(":", 1)[1].strip()
+                if val and val != "none":
+                    category = val
+        return keyword, category
+
     async def _call_operations_agent(self, message: str) -> dict:
         """Call the inventory agent. Uses check-availability if part numbers are found,
-        otherwise falls back to catalog search."""
+        otherwise extracts search keywords and queries the catalog."""
         part_numbers = _extract_part_numbers(message)
         if part_numbers:
             try:
@@ -161,13 +192,36 @@ class LangChainService:
             except httpx.HTTPError as e:
                 return {"error": f"Operations agent unreachable: {str(e)}"}
         else:
+            keyword, category = await self._extract_search_params(message)
             try:
                 async with httpx.AsyncClient(timeout=60) as client:
+                    # Try 1: keyword + category
+                    params: dict[str, str | int] = {"q": keyword}
+                    if category:
+                        params["category"] = category
                     resp = await client.get(
-                        f"{AGENT_BASE_URL}/inventory/search",
-                        params={"q": message},
+                        f"{AGENT_BASE_URL}/inventory/search", params=params,
                     )
                     resp.raise_for_status()
-                    return resp.json()
+                    result = resp.json()
+
+                    # Try 2: keyword only (no category filter)
+                    if result.get("count", 0) == 0 and category:
+                        resp = await client.get(
+                            f"{AGENT_BASE_URL}/inventory/search", params={"q": keyword},
+                        )
+                        resp.raise_for_status()
+                        result = resp.json()
+
+                    # Try 3: all parts in the category
+                    if result.get("count", 0) == 0 and category:
+                        resp = await client.get(
+                            f"{AGENT_BASE_URL}/inventory/search",
+                            params={"q": "%", "category": category},
+                        )
+                        resp.raise_for_status()
+                        result = resp.json()
+
+                    return result
             except httpx.HTTPError as e:
                 return {"error": f"Operations agent unreachable: {str(e)}"}

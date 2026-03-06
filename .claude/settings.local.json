@@ -4,7 +4,13 @@
       "Bash(curl:*)",
       "Bash(ls:*)",
       "Bash(python:*)",
-      "Bash(source:*)"
+      "Bash(source:*)",
+      "Bash(vercel:*)",
+      "Bash(npm install:*)",
+      "Bash(npx vercel:*)",
+      "Bash(git:*)",
+      "Bash(where psql:*)",
+      "Bash(pip install:*)"
     ]
   }
 }
