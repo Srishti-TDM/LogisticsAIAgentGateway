@@ -54,8 +54,8 @@ class LangChainService:
             return ChatResponse(
                 agent_used=agent_used,
                 agent_raw_response=raw,
-                gateway_interpretation=f"The {agent_used} agent is currently unreachable. Error: {raw['error']}",
-                simplified_summary=f"Sorry, I couldn't reach the {agent_used} agent right now. Please try again later.",
+                gateway_interpretation=raw["error"],
+                simplified_summary=raw["error"],
             )
 
         raw_str = json.dumps(raw, indent=2, default=str)
