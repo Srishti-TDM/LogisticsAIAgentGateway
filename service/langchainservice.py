@@ -32,6 +32,33 @@ SUMMARY_PROMPT = ChatPromptTemplate.from_template(
     "No bullet points, no markdown, just clear conversational language."
 )
 
+CLASSIFIER_PROMPT = ChatPromptTemplate.from_template(
+    "You are a logistics request classifier. "
+    "Determine whether the following user request is about:\n"
+    "- 'risk': warranty claims, failures, risk assessments, engine problems, damage reports\n"
+    "- 'operations': inventory, parts availability, stock levels, warehouses, supply chain\n\n"
+    "Respond with ONLY the single word 'risk' or 'operations'. Nothing else.\n\n"
+    "User request: {message}"
+)
+
+
+_DOMAIN_REQUEST_RE = re.compile(
+    r"^Domain:\s*(?P<domain>\S+)\s+User Request:\s*(?P<request>.+)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _parse_message(raw_message: str) -> tuple[str, str]:
+    """Parse 'Domain: {domain} User Request: {request}' format.
+
+    Returns (domain, user_request). Falls back to ("general", raw_message)
+    if the format doesn't match.
+    """
+    m = _DOMAIN_REQUEST_RE.match(raw_message.strip())
+    if m:
+        return m.group("domain").lower(), m.group("request").strip()
+    return "general", raw_message
+
 
 def _extract_part_numbers(message: str) -> list[str]:
     """Pull part numbers from free text (sequences of digits, optionally with dashes)."""
@@ -43,15 +70,26 @@ class LangChainService:
         self.llm = ChatOpenAI(model="gpt-4o-mini")
 
     async def run(self, message: str, domain: str = "general") -> ChatResponse:
+        # Parse "Domain: X User Request: Y" format from the UI
+        parsed_domain, user_request = _parse_message(message)
+        # Prefer the domain extracted from the message; fall back to the field
+        domain = parsed_domain if parsed_domain != "general" else domain
+
         if domain == "operations":
             agent_used = "operations"
-            raw = await self._call_operations_agent(message)
+            raw = await self._call_operations_agent(user_request)
         elif domain == "risk":
             agent_used = "risk_management"
-            raw = await self._call_risk_agent(message)
+            raw = await self._call_risk_agent(user_request)
         else:
-            agent_used = "general"
-            raw = await self._call_risk_agent(message)
+            # Classify the request and route to the right agent
+            domain = await self._classify(user_request)
+            if domain == "operations":
+                agent_used = "operations"
+                raw = await self._call_operations_agent(user_request)
+            else:
+                agent_used = "risk_management"
+                raw = await self._call_risk_agent(user_request)
 
         if "error" in raw:
             return ChatResponse(
@@ -77,6 +115,13 @@ class LangChainService:
             gateway_interpretation=interp_result.content,
             simplified_summary=summary_result.content,
         )
+
+    async def _classify(self, message: str) -> str:
+        """Use the LLM to classify a request as 'risk' or 'operations'."""
+        chain = CLASSIFIER_PROMPT | self.llm
+        response = await chain.ainvoke({"message": message})
+        result = response.content.strip().lower()
+        return result if result in ("risk", "operations") else "risk"
 
     async def _call_risk_agent(self, message: str) -> dict:
         """Call the warranty claim validation agent with the user's original message."""
